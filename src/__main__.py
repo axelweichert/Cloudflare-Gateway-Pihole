@@ -92,7 +92,13 @@ class CloudflareManager:
             # removed … not found in list", killing the whole run. Reading live
             # guarantees remove_items ⊆ actual membership. ~≤183 GETs/run, weekly
             # cron, well inside the rate budget (@retry/rate_limited_request).
-            items = utils.get_list_items(lst["id"])
+            try:
+                items = utils.get_list_items(lst["id"])
+            except NotFoundException:
+                # List was deleted on CF (e.g. manually) but is still cached.
+                # Treat as empty; the append below 404s and the existing
+                # recreate path self-heals instead of crashing here.
+                items = []
             list_id_to_domains[lst["id"]] = set(items)
 
         domain_to_list_id = {
