@@ -1,6 +1,8 @@
 import json
+from src import silent_error
 from src.requests import (
-    cloudflare_gateway_request, retry, rate_limited_request, retry_config
+    cloudflare_gateway_request, retry, rate_limited_request, retry_config,
+    ListItemStaleException,
 )
 
 
@@ -22,12 +24,28 @@ def create_list(name, domains):
 @rate_limited_request
 def update_list(list_id, remove_items, append_items):
     endpoint = f"/lists/{list_id}"
-    data = {
-        "remove": [domain for domain in remove_items],
-        "append": [{"value": domain} for domain in append_items]
-    }
-    status, response = cloudflare_gateway_request("PATCH", endpoint, body=json.dumps(data))
-    return response["result"]
+    remove = list(remove_items)
+    append = [{"value": domain} for domain in append_items]
+    # CF rejects the whole PATCH with 400 if any remove item is already gone
+    # (cache↔CF drift). Drop the named item(s) and re-send until it goes through
+    # or there is nothing left to do. Guards against loops that don't shrink.
+    while True:
+        try:
+            status, response = cloudflare_gateway_request(
+                "PATCH", endpoint, body=json.dumps({"remove": remove, "append": append})
+            )
+            return response["result"]
+        except ListItemStaleException as e:
+            trimmed = [d for d in remove if d not in set(e.items)]
+            if len(trimmed) == len(remove):
+                raise  # nothing matched the reported item(s) — don't loop forever
+            remove = trimmed
+            silent_error(
+                f"Dropped {len(e.items)} stale remove item(s) already absent "
+                f"from list {list_id}; retrying PATCH"
+            )
+            if not remove and not append:
+                return None  # nothing left to apply
 
 
 @retry(**retry_config)

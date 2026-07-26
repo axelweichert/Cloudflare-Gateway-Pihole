@@ -6,6 +6,13 @@ on:
   #   - cron: "0 0 * * 5"   # Every Friday midnight UTC
   workflow_dispatch:
 
+# Serialize sync runs. Never cancel a run mid-write: a cancelled run leaves the
+# CF list partially mutated and the Actions cache un-uploaded, which desyncs
+# cache↔CF and triggers the "item to be removed … not found in list" 400.
+concurrency:
+  group: cf-gateway-sync
+  cancel-in-progress: false
+
 jobs:
   run:
     name: Sync Block & Allow Lists

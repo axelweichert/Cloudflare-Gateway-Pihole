@@ -1,3 +1,4 @@
+import re
 import ssl
 import gzip
 import json
@@ -24,6 +25,19 @@ class NotFoundException(HTTPException):
     callers should evict the stale id from cache and recreate the resource
     instead of treating this as a fatal error."""
     pass
+
+class ListItemStaleException(HTTPException):
+    """Raised on a CF 400 'item to be removed, X, not found in list'. The
+    cache thinks list X still contains items that Cloudflare has already
+    dropped (a prior run was cancelled mid-write, leaving cache ↔ CF drifted).
+    CF rejects the *whole* PATCH atomically. Recoverable — update_list drops
+    the named item(s) from `remove` and re-sends. `.items` holds the names."""
+    def __init__(self, message, items):
+        super().__init__(message)
+        self.items = items
+
+# CF reports one offending item per 400; findall future-proofs multi-item bodies.
+_stale_remove_pattern = re.compile(r"item to be removed,\s*(.+?),\s*not found in list")
 
 # Cloudflare Gateway Request Function
 def cloudflare_gateway_request(
@@ -74,6 +88,14 @@ def cloudflare_gateway_request(
                 silent_error(error_message)
                 raise NotFoundException(error_message)
             elif status in [400, 403]:
+                stale = _stale_remove_pattern.findall(
+                    data.decode('utf-8', errors='ignore')
+                )
+                if stale:
+                    # Recoverable cache↔CF drift — let update_list drop these
+                    # and retry instead of exiting the run.
+                    silent_error(error_message)
+                    raise ListItemStaleException(error_message, stale)
                 error(error_message)
             else:
                 silent_error(error_message)
