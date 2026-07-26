@@ -6,6 +6,14 @@ on:
   #   - cron: "0 0 * * 5"   # Every Friday midnight UTC
   workflow_dispatch:
 
+# Serialize Gateway syncs. Two runs mutating the same Cloudflare lists at once
+# (or a run cancelled mid-PATCH) leave CF and the cache out of sync, which is
+# what produced the 400 "not found in list" failures. cancel-in-progress: false
+# queues a new run behind the current one instead of killing it mid-mutation.
+concurrency:
+  group: cloudflare-gateway-sync
+  cancel-in-progress: false
+
 jobs:
   run:
     name: Sync Block & Allow Lists

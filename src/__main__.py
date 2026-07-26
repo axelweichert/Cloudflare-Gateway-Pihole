@@ -85,7 +85,20 @@ class CloudflareManager:
 
         list_id_to_domains = {}
         for lst in current_lists:
-            items = utils.get_list_items_cached(self.cache, lst["id"])
+            # Live membership is the source of truth, NOT the cache. The cache
+            # key is per-run (github.run_id) and delete_cache() wipes it, so the
+            # cached view drifts from Cloudflare. A stale entry made remove_items
+            # reference a domain no longer on the list → PATCH 400 "item to be
+            # removed … not found in list", killing the whole run. Reading live
+            # guarantees remove_items ⊆ actual membership. ~≤183 GETs/run, weekly
+            # cron, well inside the rate budget (@retry/rate_limited_request).
+            try:
+                items = utils.get_list_items(lst["id"])
+            except NotFoundException:
+                # List was deleted on CF (e.g. manually) but is still cached.
+                # Treat as empty; the append below 404s and the existing
+                # recreate path self-heals instead of crashing here.
+                items = []
             list_id_to_domains[lst["id"]] = set(items)
 
         domain_to_list_id = {
